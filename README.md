@@ -103,6 +103,7 @@ docker buildx build --platform linux/amd64 \
 **Образ:** `cr.yandex/crpngpk9eepupjo49e6u/diplom-app:latest`
 
 **Скриншот 7 — Container Registry:** ![Container Registry](7.png)
+<img width="1359" height="579" alt="image" src="https://github.com/user-attachments/assets/ddf08855-edf1-4fa7-a553-4f6c2577e1d7" />
 
 ---
 
