@@ -1,0 +1,93 @@
+# Values для kube-prometheus-stack
+# helm install monitoring prometheus-community/kube-prometheus-stack \
+#   -n monitoring --create-namespace -f values.yaml
+
+grafana:
+  enabled: true
+  adminPassword: "admin"   # Поменять в проде!
+  
+  service:
+    type: NodePort
+    nodePort: 30030
+
+  persistence:
+    enabled: true
+    size: 5Gi
+
+  # Дашборды
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: 'default'
+          orgId: 1
+          folder: ''
+          type: file
+          disableDeletion: false
+          editable: true
+          options:
+            path: /var/lib/grafana/dashboards/default
+
+  dashboards:
+    default:
+      kubernetes-cluster:
+        gnetId: 7249
+        revision: 1
+        datasource: Prometheus
+      kubernetes-nodes:
+        gnetId: 1860
+        revision: 37
+        datasource: Prometheus
+
+prometheus:
+  enabled: true
+  
+  prometheusSpec:
+    retention: 7d
+    
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 10Gi
+
+    # Собираем все ServiceMonitor во всех namespace
+    serviceMonitorSelectorNilUsesHelmValues: false
+    serviceMonitorSelector: {}
+    serviceMonitorNamespaceSelector: {}
+
+alertmanager:
+  enabled: true
+  
+  alertmanagerSpec:
+    storage:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 2Gi
+
+nodeExporter:
+  enabled: true
+
+kubeStateMetrics:
+  enabled: true
+
+# Настройки для небольшого кластера
+prometheus-node-exporter:
+  tolerations:
+    - effect: NoSchedule
+      operator: Exists
+
+# Ресурсы (ограничиваем для экономии)
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi

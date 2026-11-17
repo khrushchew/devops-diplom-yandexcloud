@@ -1,0 +1,5 @@
+# Скопируй в terraform.tfvars и заполни значения
+yc_token    = "ПОЛУЧИТЬ: yc iam create-token"
+cloud_id    = "b1g03cqd7ovsppviksle"
+folder_id   = "b1ghranbrs9hv7nn69an"
+bucket_name = "tf-state-diplom"

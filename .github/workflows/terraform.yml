@@ -1,0 +1,87 @@
+name: Terraform Infrastructure
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'terraform/infrastructure/**'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'terraform/infrastructure/**'
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: terraform/infrastructure
+
+jobs:
+  terraform:
+    name: Terraform Plan & Apply
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: Write SA key
+        run: |
+          echo "${{ secrets.YC_SA_JSON_KEY }}" > ../../sa-key.json
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="access_key=${{ secrets.TF_S3_ACCESS_KEY }}" \
+            -backend-config="secret_key=${{ secrets.TF_S3_SECRET_KEY }}"
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
+        continue-on-error: true
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        id: plan
+        run: terraform plan -no-color -input=false
+        env:
+          TF_VAR_terraform_sa_id: ${{ secrets.YC_SA_ID }}
+
+      - name: Post Plan to PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const output = `#### Terraform Plan 📖
+            \`\`\`
+            ${{ steps.plan.outputs.stdout }}
+            \`\`\`
+            *Pushed by: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
+
+      - name: Terraform Apply
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: terraform apply -auto-approve -input=false
+        env:
+          TF_VAR_terraform_sa_id: ${{ secrets.YC_SA_ID }}
+
+      - name: Save Terraform outputs
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          terraform output -json > /tmp/tf-outputs.json
+          echo "Master IP: $(terraform output -raw master_external_ip)"
+          echo "Worker 1 IP: $(terraform output -raw worker_1_external_ip)"
+          echo "Worker 2 IP: $(terraform output -raw worker_2_external_ip)"

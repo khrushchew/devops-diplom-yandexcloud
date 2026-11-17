@@ -1,0 +1,139 @@
+---
+# Ansible playbook для установки Kubernetes кластера
+# Использование:
+#   ansible-playbook -i inventory.ini site.yml
+
+- name: Общая настройка всех нод
+  hosts: k8s_cluster
+  become: true
+  tasks:
+    - name: Отключаем swap
+      command: swapoff -a
+      changed_when: false
+
+    - name: Убираем swap из /etc/fstab
+      replace:
+        path: /etc/fstab
+        regexp: '^([^#].*?\sswap\s+sw\s+.*)$'
+        replace: '#\1'
+
+    - name: Загружаем необходимые модули ядра
+      modprobe:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - overlay
+        - br_netfilter
+
+    - name: Настройки sysctl для K8s
+      sysctl:
+        name: "{{ item.key }}"
+        value: "{{ item.value }}"
+        state: present
+        reload: true
+      loop:
+        - { key: "net.bridge.bridge-nf-call-iptables", value: "1" }
+        - { key: "net.bridge.bridge-nf-call-ip6tables", value: "1" }
+        - { key: "net.ipv4.ip_forward", value: "1" }
+
+    - name: Устанавливаем containerd и зависимости
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gpg
+          - containerd
+        state: present
+        update_cache: true
+
+    - name: Создаём конфиг containerd с SystemdCgroup
+      shell: |
+        containerd config default > /etc/containerd/config.toml
+        sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+      args:
+        creates: /etc/containerd/config.toml
+
+    - name: Запускаем containerd
+      systemd:
+        name: containerd
+        state: restarted
+        enabled: true
+
+    - name: Добавляем GPG ключ репозитория K8s
+      shell: |
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.31/deb/Release.key | \
+          gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      args:
+        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+    - name: Добавляем репозиторий K8s
+      apt_repository:
+        repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.31/deb/ /"
+        state: present
+        filename: kubernetes
+
+    - name: Устанавливаем kubelet, kubeadm, kubectl
+      apt:
+        name:
+          - kubelet
+          - kubeadm
+          - kubectl
+        state: present
+        update_cache: true
+
+    - name: Закрепляем версии K8s пакетов
+      dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop:
+        - kubelet
+        - kubeadm
+        - kubectl
+
+- name: Инициализация мастер-ноды
+  hosts: masters
+  become: true
+  tasks:
+    - name: Инициализируем кластер
+      shell: |
+        kubeadm init \
+          --apiserver-advertise-address={{ ansible_host }} \
+          --pod-network-cidr=10.244.0.0/16 \
+          --kubernetes-version=v1.31.0 \
+          2>&1 | tee /tmp/kubeadm-init.log
+      args:
+        creates: /etc/kubernetes/admin.conf
+      register: kubeadm_init
+
+    - name: Настраиваем kubectl для ubuntu
+      shell: |
+        mkdir -p /home/ubuntu/.kube
+        cp /etc/kubernetes/admin.conf /home/ubuntu/.kube/config
+        chown ubuntu:ubuntu /home/ubuntu/.kube/config
+      args:
+        creates: /home/ubuntu/.kube/config
+
+    - name: Устанавливаем Flannel CNI
+      become: false
+      shell: kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
+      environment:
+        KUBECONFIG: /home/ubuntu/.kube/config
+
+    - name: Получаем join-команду
+      shell: kubeadm token create --print-join-command
+      register: join_command
+      changed_when: false
+
+    - name: Сохраняем join-команду
+      set_fact:
+        k8s_join_command: "{{ join_command.stdout }}"
+
+- name: Присоединяем воркеры к кластеру
+  hosts: workers
+  become: true
+  tasks:
+    - name: Выполняем join
+      shell: "{{ hostvars[groups['masters'][0]]['k8s_join_command'] }}"
+      args:
+        creates: /etc/kubernetes/kubelet.conf

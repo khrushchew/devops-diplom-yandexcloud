@@ -1,0 +1,5 @@
+# Скопируй в terraform.tfvars и заполни значения
+cloud_id            = "b1g03cqd7ovsppviksle"
+folder_id           = "b1ghranbrs9hv7nn69an"
+terraform_sa_id     = "ЗАМЕНИ_НА_ID_ИЗ_BOOTSTRAP_OUTPUT"
+ssh_public_key_path = "~/.ssh/id_rsa.pub"
