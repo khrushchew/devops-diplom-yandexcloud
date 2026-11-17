@@ -12,16 +12,17 @@ on:
 
 env:
   REGISTRY: cr.yandex
+  REGISTRY_ID: ${{ secrets.YC_REGISTRY_ID }}
   IMAGE_NAME: diplom-app
 
 jobs:
-  # ── Сборка и публикация Docker образа ───────────────────────
+  # ── Сборка и публикация Docker образа ──────────────────────────
   build-and-push:
     name: Build & Push Docker Image
     runs-on: ubuntu-latest
     outputs:
       image_tag: ${{ steps.meta.outputs.version }}
-      image_full: ${{ env.REGISTRY }}/${{ secrets.YC_REGISTRY_ID }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+      image_full: cr.yandex/${{ secrets.YC_REGISTRY_ID }}/diplom-app:${{ steps.meta.outputs.version }}
 
     steps:
       - name: Checkout code
@@ -30,23 +31,18 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Install YC CLI
-        run: |
-          curl -fsSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash
-          echo "$HOME/yandex-cloud/bin" >> $GITHUB_PATH
-
-      - name: Authenticate in Yandex Container Registry
-        run: |
-          echo "${{ secrets.YC_SA_JSON_KEY }}" > /tmp/sa-key.json
-          yc config set service-account-key /tmp/sa-key.json
-          yc config set folder-id ${{ secrets.YC_FOLDER_ID }}
-          yc container registry configure-docker
+      - name: Log in to Yandex Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: cr.yandex
+          username: json_key
+          password: ${{ secrets.YC_SA_JSON_KEY }}
 
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ secrets.YC_REGISTRY_ID }}/${{ env.IMAGE_NAME }}
+          images: cr.yandex/${{ secrets.YC_REGISTRY_ID }}/${{ env.IMAGE_NAME }}
           tags: |
             type=ref,event=branch
             type=ref,event=pr
@@ -58,28 +54,23 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: ./app
+          platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # ── Деплой в Kubernetes (только при теге) ───────────────────
+  # ── Деплой в Kubernetes (только при теге v*.*.*) ───────────────
   deploy:
     name: Deploy to Kubernetes
     runs-on: ubuntu-latest
     needs: build-and-push
-    # Деплоим только при тегах вида v*.*.*
     if: startsWith(github.ref, 'refs/tags/v')
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Install YC CLI
-        run: |
-          curl -fsSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash
-          echo "$HOME/yandex-cloud/bin" >> $GITHUB_PATH
 
       - name: Setup kubectl
         uses: azure/setup-kubectl@v3
@@ -88,12 +79,6 @@ jobs:
 
       - name: Configure kubectl
         run: |
-          echo "${{ secrets.YC_SA_JSON_KEY }}" > /tmp/sa-key.json
-          yc config set service-account-key /tmp/sa-key.json
-          yc config set folder-id ${{ secrets.YC_FOLDER_ID }}
-          yc config set cloud-id ${{ secrets.YC_CLOUD_ID }}
-          
-          # Получаем kubeconfig через SSH к мастеру
           mkdir -p ~/.kube
           echo "${{ secrets.K8S_KUBECONFIG }}" | base64 -d > ~/.kube/config
           chmod 600 ~/.kube/config
@@ -101,7 +86,7 @@ jobs:
       - name: Verify cluster connection
         run: kubectl get nodes
 
-      - name: Create/Update registry secret
+      - name: Update registry secret
         run: |
           kubectl create secret docker-registry yc-registry-secret \
             --docker-server=cr.yandex \
@@ -111,23 +96,15 @@ jobs:
 
       - name: Deploy application
         run: |
-          # Подставляем реальный registry ID и тег
-          sed -i "s|cr.yandex/REGISTRY_ID/diplom-app:latest|${{ needs.build-and-push.outputs.image_full }}|g" \
-            k8s/app/deployment.yaml
-          
-          kubectl apply -f k8s/app/deployment.yaml
-          kubectl apply -f k8s/app/service.yaml
-          
-          # Ждём завершения роллаута
+          IMAGE="cr.yandex/${{ secrets.YC_REGISTRY_ID }}/diplom-app:${{ needs.build-and-push.outputs.image_tag }}"
+          echo "Deploying image: $IMAGE"
+          kubectl set image deployment/diplom-app diplom-app="$IMAGE"
           kubectl rollout status deployment/diplom-app --timeout=5m
 
       - name: Verify deployment
         run: |
           kubectl get pods -l app=diplom-app
           kubectl get service diplom-app
+          echo "✅ Deployed: cr.yandex/${{ secrets.YC_REGISTRY_ID }}/diplom-app:${{ needs.build-and-push.outputs.image_tag }}"
+          echo "🏷️  Tag: ${{ github.ref_name }}"
 
-      - name: Post deployment info
-        run: |
-          echo "✅ Deployed image: ${{ needs.build-and-push.outputs.image_full }}"
-          echo "🏷️ Tag: ${{ github.ref_name }}"
-          echo "⏱️ Time: $(date)"
