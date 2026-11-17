@@ -147,6 +147,10 @@ helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
 | `TF_S3_SECRET_KEY` | Secret key для S3 backend |
 | `K8S_KUBECONFIG` | kubeconfig в base64 |
 
+
+**Скриншот 9 — CI/CD pipeline (детали v1.0.0):** ![CI/CD run](9.png)
+
+**Скриншот 10 — GitHub Actions (все запуски):** ![GitHub Actions](10.png)
 ```bash
 # Добавить все секреты одной командой
 bash scripts/setup-github-secrets.sh <GITHUB_PAT>
